@@ -35,6 +35,36 @@ let socketDownward = null;
 
 const socketList = [];
 
+const bufferList = [];
+let buffer = '';
+let bufferLock = false;
+
+function dataHandler(dataString) {
+  const json = JSON.parse(dataString);
+  const userSocket = socketList[json.id];
+  if (userSocket) userSocket.write(Buffer.from(json.data));
+}
+
+function processBuffer() {
+  if (bufferLock) return;
+  bufferLock = true;
+  while (bufferList.length > 0) {
+    buffer += bufferList.shift();
+  }
+
+  while (true) {
+    const index = buffer.indexOf('}\n\n');
+    if (index === -1) {
+      break;
+    } else {
+      dataHandler(buffer.slice(0, index + 1));
+      buffer = buffer.substring(index + 3);
+    }
+  }
+
+  bufferLock = false;
+}
+
 server.on('connection', (socket) => {
   console.log(`${socket.remoteAddress}:${socket.remotePort} Connected.`);
 
@@ -42,11 +72,6 @@ server.on('connection', (socket) => {
   socketList[socket.id] = socket;
 
   socket.on('data', (data) => {
-    function dataHandler(dataString) {
-      const json = JSON.parse(dataString);
-      const userSocket = socketList[json.id];
-      if (userSocket) userSocket.write(Buffer.from(json.data));
-    }
 
     if (!socketDownward) {
       if (data.toString() === PASSPHRASE) {
@@ -57,21 +82,12 @@ server.on('connection', (socket) => {
       }
     } else if (socket === socketDownward) {
       // Forward responses to user
-      let dataset = data;
-      while (true) {
-        const index = dataset.indexOf('}{');
-        if (index === -1) {
-          dataHandler(dataset);
-          break;
-        } else {
-          dataHandler(dataset.slice(0, index + 1));
-          dataset = dataset.substring(index + 1);
-        }
-      }
+      bufferList.push(data.toString());
+      processBuffer();
 
     } else {
       // Forward requests from user to proxy server
-      socketDownward.write(JSON.stringify({ id: socket.id, data }));
+      socketDownward.write(`${JSON.stringify({ id: socket.id, data })}\n\n`);
     }
   });
 
